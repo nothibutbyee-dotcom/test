@@ -1,4 +1,4 @@
-name: MonApp
+name: Dopamine+
 options:
   bundleIdPrefix: com.moi
 targets:
