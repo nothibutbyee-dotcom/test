@@ -18,7 +18,9 @@ jobs:
       - name: Compiler (sans signature)
         run: |
           PROJ=$(ls -d *.xcodeproj | head -1)
-          SCHEME="${PROJ%.xcodeproj}"
+          xcodebuild -list -project "$PROJ"
+          SCHEME=$(xcodebuild -list -json -project "$PROJ" | python3 -c "import json,sys; print(json.load(sys.stdin)['project']['schemes'][0])")
+          echo "Scheme: $SCHEME"
           xcodebuild -project "$PROJ" -scheme "$SCHEME" \
             -configuration Release -sdk iphoneos \
             -derivedDataPath build \
