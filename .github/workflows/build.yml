@@ -1,0 +1,29 @@
+name: Build IPA
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Installer XcodeGen
+        run: brew install xcodegen
+      - name: Générer le projet Xcode
+        run: xcodegen generate
+      - name: Compiler (sans signature)
+        run: |
+          xcodebuild -project MonApp.xcodeproj -scheme MonApp \
+            -configuration Release -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+      - name: Créer l'IPA
+        run: |
+          mkdir Payload
+          cp -R build/Build/Products/Release-iphoneos/MonApp.app Payload/
+          zip -r MonApp.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MonApp-ipa
+          path: MonApp.ipa
