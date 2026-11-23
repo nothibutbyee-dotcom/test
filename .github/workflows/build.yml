@@ -17,16 +17,19 @@ jobs:
         run: xcodegen generate
       - name: Compiler (sans signature)
         run: |
-          xcodebuild -project MonApp.xcodeproj -scheme MonApp \
+          PROJ=$(ls -d *.xcodeproj | head -1)
+          SCHEME="${PROJ%.xcodeproj}"
+          xcodebuild -project "$PROJ" -scheme "$SCHEME" \
             -configuration Release -sdk iphoneos \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
       - name: Créer l'IPA
         run: |
+          APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -1)
           mkdir Payload
-          cp -R build/Build/Products/Release-iphoneos/MonApp.app Payload/
-          zip -r MonApp.ipa Payload
+          cp -R "$APP" Payload/
+          zip -r App.ipa Payload
       - uses: actions/upload-artifact@v4
         with:
-          name: MonApp-ipa
-          path: MonApp/MonApp.ipa
+          name: ipa
+          path: MonApp/App.ipa
