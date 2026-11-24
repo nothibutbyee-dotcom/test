@@ -8,7 +8,7 @@ jobs:
     runs-on: macos-latest
     defaults:
       run:
-        working-directory: MonApp
+        working-directory: misaki
     steps:
       - uses: actions/checkout@v4
       - name: Installer XcodeGen
@@ -34,4 +34,4 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ipa
-          path: MonApp/App.ipa
+          path: misaki/App.ipa
