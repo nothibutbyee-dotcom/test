@@ -26,6 +26,9 @@ struct MisakiView: View {
     @AppStorage("haptics") private var haptics = true
     @AppStorage("lockAfterRespring") private var lockAfterRespring = true
     @AppStorage("logUsesAccent") private var logUsesAccent = false
+    @AppStorage("speed") private var speed = 1.0
+    @AppStorage("jailbroken") private var jailbroken = false
+    @AppStorage("installedPkgs") private var installedPkgs = ""
 
     // Jailbreak tab
     @State private var phase: Phase = .idle
@@ -34,6 +37,12 @@ struct MisakiView: View {
     @State private var blackout = false
     @State private var showConfirm = false
     @State private var showLock = false
+    @State private var showBootLogo = false
+    @State private var bootProgress: Double = 0
+    @State private var toast: String? = nil
+
+    // Packages tab
+    @State private var installing: String? = nil
 
     // Exploit tab
     @State private var exploit = 0
@@ -68,6 +77,7 @@ struct MisakiView: View {
     ]
 
     private let credits: [(String, String)] = [
+        ("frtzxh1", "creator of misakilarp"),
         ("misaki", "lead larper"),
         ("Mr. Banana", "kernel whisperer"),
         ("my cat", "beta tester (walked on the keyboard)"),
@@ -76,9 +86,28 @@ struct MisakiView: View {
         ("you 💜", "for believing")
     ]
 
+    private let packages: [(String, String, String)] = [
+        ("LarpBoard", "Custom themes for nothing in particular", "paintbrush.fill"),
+        ("BananaCC", "Adds a banana toggle to Control Center", "leaf.fill"),
+        ("KernelKitty", "A cat that keeps an eye on your kernel", "pawprint.fill"),
+        ("MisakiTweak", "Makes everything 12% more purple", "sparkles"),
+        ("NoLarp Pro", "Removes larping. Mostly.", "nosign"),
+        ("DockPlus", "Adds extra icons to your dock", "square.grid.2x2.fill")
+    ]
+
     private var theme: MisakiTheme { themes[min(themeIndex, themes.count - 1)] }
     private var accent: Color { accents[min(accentIndex, accents.count - 1)].1 }
     private var logColor: Color { logUsesAccent ? accent : .green }
+
+    private var successChance: Int {
+        let base = [40, 55, 70][min(exploit, 2)]
+        return min(99, base + Int(luck * 0.3))
+    }
+
+    private var displayProgress: Double {
+        if phase == .idle { return jailbroken ? 1 : 0 }
+        return progress
+    }
 
     private var steps: [(String, Double)] {
         [
@@ -102,15 +131,23 @@ struct MisakiView: View {
 
     private var buttonTitle: String {
         switch phase {
-        case .idle: return "Jailbreak"
+        case .idle: return jailbroken ? "Jailbroken ✓" : "Jailbreak"
         case .running: return "Jailbreaking..."
         case .done: return "Respring"
         }
     }
 
+    private var buttonColor: Color {
+        switch phase {
+        case .idle: return jailbroken ? accent.opacity(0.45) : accent
+        case .running: return Color.gray
+        case .done: return accent
+        }
+    }
+
     private var statusText: String {
         switch phase {
-        case .idle: return "Ready"
+        case .idle: return jailbroken ? "Jailbroken" : "Ready"
         case .running: return logs.last ?? "Starting..."
         case .done: return "Jailbroken"
         }
@@ -131,14 +168,32 @@ struct MisakiView: View {
             TabView {
                 jailbreakTab
                     .tabItem { Label("jailbreak", systemImage: "lock.open.fill") }
-                creditsTab
-                    .tabItem { Label("credits", systemImage: "heart.fill") }
+                packagesTab
+                    .tabItem { Label("packages", systemImage: "shippingbox.fill") }
                 exploitTab
                     .tabItem { Label("exploit", systemImage: "bolt.fill") }
+                creditsTab
+                    .tabItem { Label("credits", systemImage: "heart.fill") }
                 settingsTab
                     .tabItem { Label("settings", systemImage: "gearshape.fill") }
             }
             .accentColor(accent)
+
+            if let message = toast {
+                VStack {
+                    Text(message)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(accent.opacity(0.92))
+                        .cornerRadius(20)
+                        .padding(.top, 8)
+                    Spacer()
+                }
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .zIndex(1)
+            }
 
             if showLock {
                 lockScreen
@@ -148,6 +203,7 @@ struct MisakiView: View {
 
             Color.black
                 .ignoresSafeArea()
+                .overlay(bootLogo)
                 .opacity(blackout ? 1 : 0)
                 .allowsHitTesting(blackout)
                 .zIndex(3)
@@ -198,6 +254,27 @@ struct MisakiView: View {
         UINotificationFeedbackGenerator().notificationOccurred(type)
     }
 
+    private func showToast(_ text: String) {
+        withAnimation { toast = text }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
+            withAnimation {
+                if toast == text { toast = nil }
+            }
+        }
+    }
+
+    private var bootLogo: some View {
+        VStack(spacing: 28) {
+            Image(systemName: "applelogo")
+                .font(.system(size: 78))
+                .foregroundColor(.white)
+            ProgressView(value: bootProgress)
+                .tint(.white)
+                .frame(width: 150)
+        }
+        .opacity(showBootLogo ? 1 : 0)
+    }
+
     // MARK: - Jailbreak tab
 
     private var progressRing: some View {
@@ -205,20 +282,29 @@ struct MisakiView: View {
             Circle()
                 .stroke(accent.opacity(0.2), lineWidth: 12)
             Circle()
-                .trim(from: 0, to: CGFloat(progress))
+                .trim(from: 0, to: CGFloat(displayProgress))
                 .stroke(accent, style: StrokeStyle(lineWidth: 12, lineCap: .round))
                 .rotationEffect(.degrees(-90))
                 .shadow(color: accent.opacity(0.7), radius: 10)
             VStack(spacing: 4) {
-                Image(systemName: phase == .done ? "lock.open.fill" : "lock.fill")
+                Image(systemName: (phase == .done || jailbroken) ? "lock.open.fill" : "lock.fill")
                     .font(.system(size: 38))
                     .foregroundColor(accent)
-                Text(phase == .idle ? "—" : "\(Int(progress * 100))%")
+                Text((phase == .idle && !jailbroken) ? "—" : "\(Int(displayProgress * 100))%")
                     .font(.system(size: 22, weight: .bold, design: .rounded))
                     .foregroundColor(.white)
             }
         }
-        .frame(width: 170, height: 170)
+        .frame(width: 160, height: 160)
+    }
+
+    private var creditBadge: some View {
+        Text("made by frtzxh1")
+            .font(.system(size: 14, weight: .bold, design: .rounded))
+            .foregroundColor(accent)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 7)
+            .background(Capsule().fill(accent.opacity(0.15)))
     }
 
     private var logBox: some View {
@@ -239,15 +325,47 @@ struct MisakiView: View {
                 withAnimation { proxy.scrollTo(count - 1, anchor: .bottom) }
             }
         }
-        .frame(height: 170)
+        .frame(height: 150)
         .background(Color.black.opacity(0.5))
         .cornerRadius(12)
         .padding(.horizontal)
     }
 
+    private func utilityButton(_ label: String, _ icon: String, color: Color,
+                               action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 18))
+                Text(label)
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .foregroundColor(color)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .background(Color.white.opacity(0.08))
+            .cornerRadius(12)
+        }
+    }
+
+    private var utilitiesRow: some View {
+        HStack(spacing: 10) {
+            utilityButton("UICache", "arrow.triangle.2.circlepath", color: accent) {
+                Task { await runUICache() }
+            }
+            utilityButton("Reboot", "power", color: accent) {
+                Task { await rebootUserspace() }
+            }
+            utilityButton("Remove", "trash", color: .red) {
+                removeJailbreak()
+            }
+        }
+        .padding(.horizontal)
+    }
+
     private var mainButton: some View {
         Button {
-            if phase == .idle {
+            if phase == .idle && !jailbroken {
                 showConfirm = true
             } else if phase == .done {
                 Task { await respring() }
@@ -258,10 +376,10 @@ struct MisakiView: View {
                 .foregroundColor(.white)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 16)
-                .background(phase == .running ? Color.gray : accent)
+                .background(buttonColor)
                 .cornerRadius(14)
         }
-        .disabled(phase == .running)
+        .disabled(phase == .running || (phase == .idle && jailbroken))
         .padding(.horizontal)
         .padding(.bottom, 16)
     }
@@ -270,33 +388,113 @@ struct MisakiView: View {
         ZStack {
             background
 
-            VStack(spacing: 16) {
-                title("misakilarp")
-                    .padding(.top, 30)
+            VStack(spacing: 12) {
+                ScrollView {
+                    VStack(spacing: 16) {
+                        title("misakilarp")
+                            .padding(.top, 24)
 
-                Text("iOS \(UIDevice.current.systemVersion) · \(UIDevice.current.model)")
-                    .font(.system(size: 14, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.6))
+                        Text("iOS \(UIDevice.current.systemVersion) · \(UIDevice.current.model)")
+                            .font(.system(size: 14, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.6))
 
-                progressRing
-                    .padding(.top, 6)
+                        progressRing
 
-                Text(statusText)
-                    .font(.system(size: 13, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.7))
-                    .lineLimit(1)
-                    .padding(.horizontal)
+                        Text(statusText)
+                            .font(.system(size: 13, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.7))
+                            .lineLimit(1)
+                            .padding(.horizontal)
 
-                HStack(spacing: 8) {
-                    chip("exploit: \(exploits[exploit])")
-                    chip("luck: \(Int(luck))%")
+                        HStack(spacing: 8) {
+                            chip("exploit: \(exploits[exploit])")
+                            chip("luck: \(Int(luck))%")
+                        }
+
+                        creditBadge
+
+                        logBox
+                    }
+                    .padding(.bottom, 8)
                 }
 
-                logBox
-
-                Spacer()
+                if jailbroken && phase == .idle {
+                    utilitiesRow
+                }
 
                 mainButton
+            }
+        }
+    }
+
+    // MARK: - Packages tab
+
+    private func isInstalled(_ name: String) -> Bool {
+        installedPkgs.components(separatedBy: ",").contains(name)
+    }
+
+    private func packageRow(_ i: Int) -> some View {
+        let pkg = packages[i]
+        let installed = isInstalled(pkg.0)
+        return HStack(spacing: 12) {
+            Image(systemName: pkg.2)
+                .font(.system(size: 20))
+                .foregroundColor(.white)
+                .frame(width: 44, height: 44)
+                .background(accent.opacity(0.8))
+                .cornerRadius(10)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(pkg.0)
+                    .font(.headline)
+                    .foregroundColor(.white)
+                Text(pkg.1)
+                    .font(.system(size: 12))
+                    .foregroundColor(.white.opacity(0.6))
+            }
+
+            Spacer()
+
+            if installing == pkg.0 {
+                ProgressView().tint(.white)
+            } else {
+                Button {
+                    Task { await togglePackage(pkg.0) }
+                } label: {
+                    Text(installed ? "Remove" : "Get")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundColor(installed ? .red : .white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 6)
+                        .background(installed ? Color.white.opacity(0.1) : accent)
+                        .cornerRadius(14)
+                }
+            }
+        }
+        .padding(12)
+        .background(Color.white.opacity(0.07))
+        .cornerRadius(14)
+    }
+
+    private var packagesTab: some View {
+        ZStack {
+            background
+
+            ScrollView {
+                VStack(spacing: 12) {
+                    title("packages")
+                        .padding(.top, 40)
+
+                    if !jailbroken {
+                        chip("jailbreak required to install")
+                    }
+
+                    ForEach(packages.indices, id: \.self) { i in
+                        packageRow(i)
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.bottom, 20)
             }
         }
     }
@@ -333,6 +531,7 @@ struct MisakiView: View {
                     }
                 }
                 .padding(.horizontal)
+                .padding(.bottom, 20)
             }
         }
     }
@@ -360,6 +559,13 @@ struct MisakiView: View {
                             .foregroundColor(.white)
                         Slider(value: $luck, in: 0...100, step: 1)
                             .accentColor(accent)
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Success chance: \(successChance)%")
+                            .foregroundColor(.white)
+                        ProgressView(value: Double(successChance), total: 100)
+                            .tint(accent)
                     }
 
                     Toggle("Disable PAC", isOn: $disablePAC)
@@ -397,6 +603,7 @@ struct MisakiView: View {
                     }
                 }
                 .padding(.horizontal)
+                .padding(.bottom, 20)
             }
         }
     }
@@ -475,6 +682,15 @@ struct MisakiView: View {
                         themePicker
                     }
 
+                    settingsCard("Jailbreak") {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Speed: x\(String(format: "%.1f", speed))")
+                                .foregroundColor(.white)
+                            Slider(value: $speed, in: 0.5...3, step: 0.5)
+                                .accentColor(accent)
+                        }
+                    }
+
                     settingsCard("Respring") {
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Duration: \(Int(respringSeconds)) s")
@@ -500,6 +716,7 @@ struct MisakiView: View {
                         themeIndex = 0
                         accentIndex = 0
                         respringSeconds = 6
+                        speed = 1
                         haptics = true
                         lockAfterRespring = true
                         logUsesAccent = false
@@ -519,7 +736,7 @@ struct MisakiView: View {
         }
     }
 
-    // MARK: - Lock screen (shown after respring)
+    // MARK: - Lock screen (shown after respring / reboot)
 
     private var lockScreen: some View {
         ZStack {
@@ -583,15 +800,17 @@ struct MisakiView: View {
 
     @MainActor
     private func startJailbreak() async {
-        guard phase == .idle else { return }
+        guard phase == .idle, !jailbroken else { return }
         phase = .running
         logs = []
         progress = 0
         for (line, value) in steps {
             logs.append(line)
             withAnimation(.easeInOut(duration: 0.4)) { progress = value }
-            try? await Task.sleep(nanoseconds: UInt64.random(in: 350_000_000...900_000_000))
+            let delay = Double(UInt64.random(in: 350_000_000...900_000_000)) / speed
+            try? await Task.sleep(nanoseconds: UInt64(delay))
         }
+        jailbroken = true
         phase = .done
         haptic(.success)
     }
@@ -608,5 +827,68 @@ struct MisakiView: View {
             blackout = false
         }
         haptic(.success)
+    }
+
+    @MainActor
+    private func rebootUserspace() async {
+        withAnimation(.easeIn(duration: 0.3)) { blackout = true }
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        bootProgress = 0
+        showBootLogo = true
+        let total = 10
+        for i in 1...total {
+            withAnimation(.linear(duration: 0.8)) {
+                bootProgress = Double(i) / Double(total)
+            }
+            try? await Task.sleep(nanoseconds: 800_000_000)
+        }
+        showBootLogo = false
+        try? await Task.sleep(nanoseconds: 700_000_000)
+        phase = .idle
+        progress = 0
+        logs = []
+        withAnimation(.easeOut(duration: 0.6)) {
+            showLock = true
+            blackout = false
+        }
+        haptic(.success)
+    }
+
+    @MainActor
+    private func runUICache() async {
+        showToast("Refreshing icon cache...")
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        showToast("UICache complete")
+        haptic(.success)
+    }
+
+    private func removeJailbreak() {
+        jailbroken = false
+        installedPkgs = ""
+        progress = 0
+        logs = []
+        showToast("Jailbreak removed")
+    }
+
+    @MainActor
+    private func togglePackage(_ name: String) async {
+        guard jailbroken else {
+            showToast("Jailbreak first")
+            return
+        }
+        var list = installedPkgs.components(separatedBy: ",").filter { !$0.isEmpty }
+        if list.contains(name) {
+            list.removeAll { $0 == name }
+            installedPkgs = list.joined(separator: ",")
+            showToast("\(name) removed")
+            return
+        }
+        installing = name
+        try? await Task.sleep(nanoseconds: UInt64(2_000_000_000 / speed))
+        list.append(name)
+        installedPkgs = list.joined(separator: ",")
+        installing = nil
+        haptic(.success)
+        showToast("\(name) installed")
     }
 }
