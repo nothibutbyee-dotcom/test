@@ -5,7 +5,7 @@ on:
     branches: [main]
 jobs:
   build:
-    runs-on: macos-18
+    runs-on: macos-13
     defaults:
       run:
         working-directory: misaki
