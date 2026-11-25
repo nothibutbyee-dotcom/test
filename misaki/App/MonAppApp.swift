@@ -10,143 +10,885 @@ struct MisakiLarpApp: App {
     }
 }
 
+struct MisakiTheme {
+    let name: String
+    let top: Color
+    let bottom: Color
+}
+
 struct MisakiView: View {
     enum Phase { case idle, running, done }
 
+    // Settings (saved on the device)
+    @AppStorage("themeIndex") private var themeIndex = 0
+    @AppStorage("accentIndex") private var accentIndex = 0
+    @AppStorage("respringSeconds") private var respringSeconds = 6.0
+    @AppStorage("haptics") private var haptics = true
+    @AppStorage("lockAfterRespring") private var lockAfterRespring = true
+    @AppStorage("logUsesAccent") private var logUsesAccent = false
+    @AppStorage("speed") private var speed = 1.0
+    @AppStorage("jailbroken") private var jailbroken = false
+    @AppStorage("installedPkgs") private var installedPkgs = ""
+
+    // Jailbreak tab
     @State private var phase: Phase = .idle
     @State private var progress: Double = 0
     @State private var logs: [String] = []
     @State private var blackout = false
+    @State private var showConfirm = false
+    @State private var showLock = false
+    @State private var showBootLogo = false
+    @State private var bootProgress: Double = 0
+    @State private var toast: String? = nil
 
-    private let steps: [(String, Double)] = [
-        ("[*] misakilarp v1.0 starting...", 0.05),
-        ("[*] checking device: \(UIDevice.current.model), iOS \(UIDevice.current.systemVersion)", 0.10),
-        ("[*] fetching kernel offsets...", 0.18),
-        ("[+] offsets found (trust me)", 0.25),
-        ("[*] triggering vulnerability...", 0.34),
-        ("[*] racing threads...", 0.42),
-        ("[+] got kernel read/write", 0.52),
-        ("[*] bypassing PAC...", 0.60),
-        ("[*] bypassing PPL...", 0.68),
-        ("[+] escaping sandbox", 0.76),
-        ("[*] remounting rootfs as r/w...", 0.83),
-        ("[*] installing bootstrap...", 0.90),
-        ("[*] loading tweak injection...", 0.96),
-        ("[+] done. nothing was actually modified.", 1.0)
+    // Packages tab
+    @State private var installing: String? = nil
+
+    // Exploit tab
+    @State private var exploit = 0
+    @State private var luck: Double = 50
+    @State private var disablePAC = true
+    @State private var summonCat = false
+    @State private var offsets: [String] = []
+
+    private let exploits = ["kfd", "landa", "misakipwn"]
+
+    private let themes: [MisakiTheme] = [
+        MisakiTheme(name: "Midnight",
+                    top: Color(red: 0.12, green: 0.04, blue: 0.20),
+                    bottom: Color(red: 0.02, green: 0.02, blue: 0.06)),
+        MisakiTheme(name: "Ocean",
+                    top: Color(red: 0.02, green: 0.14, blue: 0.28),
+                    bottom: Color(red: 0.01, green: 0.03, blue: 0.08)),
+        MisakiTheme(name: "Sunset",
+                    top: Color(red: 0.32, green: 0.08, blue: 0.16),
+                    bottom: Color(red: 0.06, green: 0.02, blue: 0.06)),
+        MisakiTheme(name: "Matrix",
+                    top: Color(red: 0.00, green: 0.14, blue: 0.06),
+                    bottom: Color(red: 0.00, green: 0.03, blue: 0.01)),
+        MisakiTheme(name: "Graphite",
+                    top: Color(red: 0.18, green: 0.18, blue: 0.20),
+                    bottom: Color(red: 0.03, green: 0.03, blue: 0.04))
     ]
+
+    private let accents: [(String, Color)] = [
+        ("Pink", .pink), ("Purple", .purple), ("Blue", .blue), ("Cyan", .cyan),
+        ("Green", .green), ("Orange", .orange), ("Red", .red)
+    ]
+
+    private let credits: [(String, String)] = [
+        ("frtzxh1", "creator of misakilarp"),
+        ("misaki", "lead larper"),
+        ("Mr. Banana", "kernel whisperer"),
+        ("my cat", "beta tester (walked on the keyboard)"),
+        ("Stack Overflow", "literally everything"),
+        ("a random guy on Discord", "moral support"),
+        ("you 💜", "for believing")
+    ]
+
+    private let packages: [(String, String, String)] = [
+        ("LarpBoard", "Custom themes for nothing in particular", "paintbrush.fill"),
+        ("BananaCC", "Adds a banana toggle to Control Center", "leaf.fill"),
+        ("KernelKitty", "A cat that keeps an eye on your kernel", "pawprint.fill"),
+        ("MisakiTweak", "Makes everything 12% more purple", "sparkles"),
+        ("NoLarp Pro", "Removes larping. Mostly.", "nosign"),
+        ("DockPlus", "Adds extra icons to your dock", "square.grid.2x2.fill")
+    ]
+
+    private var theme: MisakiTheme { themes[min(themeIndex, themes.count - 1)] }
+    private var accent: Color { accents[min(accentIndex, accents.count - 1)].1 }
+    private var logColor: Color { logUsesAccent ? accent : .green }
+
+    private var successChance: Int {
+        let base = [40, 55, 70][min(exploit, 2)]
+        return min(99, base + Int(luck * 0.3))
+    }
+
+    private var displayProgress: Double {
+        if phase == .idle { return jailbroken ? 1 : 0 }
+        return progress
+    }
+
+    private var steps: [(String, Double)] {
+        [
+            ("[*] misakilarp v1.0 starting...", 0.05),
+            ("[*] device: \(UIDevice.current.model), iOS \(UIDevice.current.systemVersion)", 0.10),
+            ("[*] using exploit: \(exploits[exploit])", 0.16),
+            ("[*] kernel luck: \(Int(luck))%", 0.22),
+            ("[*] fetching kernel offsets...", 0.30),
+            ("[+] offsets found", 0.38),
+            ("[*] triggering vulnerability...", 0.46),
+            ("[*] racing threads...", 0.54),
+            ("[+] got kernel read/write", 0.62),
+            (disablePAC ? "[*] bypassing PAC..." : "[*] PAC bypass skipped", 0.70),
+            ("[*] bypassing PPL...", 0.76),
+            ("[+] escaping sandbox", 0.82),
+            (summonCat ? "[+] kernel cat summoned 🐱" : "[*] remounting rootfs as r/w...", 0.88),
+            ("[*] installing bootstrap...", 0.94),
+            ("[+] jailbreak succeeded, respring to finish", 1.0)
+        ]
+    }
 
     private var buttonTitle: String {
         switch phase {
-        case .idle: return "Jailbreak"
+        case .idle: return jailbroken ? "Jailbroken ✓" : "Jailbreak"
         case .running: return "Jailbreaking..."
         case .done: return "Respring"
         }
     }
 
+    private var buttonColor: Color {
+        switch phase {
+        case .idle: return jailbroken ? accent.opacity(0.45) : accent
+        case .running: return Color.gray
+        case .done: return accent
+        }
+    }
+
+    private var statusText: String {
+        switch phase {
+        case .idle: return jailbroken ? "Jailbroken" : "Ready"
+        case .running: return logs.last ?? "Starting..."
+        case .done: return "Jailbroken"
+        }
+    }
+
+    init() {
+        let appearance = UITabBarAppearance()
+        appearance.configureWithOpaqueBackground()
+        appearance.backgroundColor = UIColor(red: 0.06, green: 0.02, blue: 0.11, alpha: 1)
+        UITabBar.appearance().standardAppearance = appearance
+        UITabBar.appearance().scrollEdgeAppearance = appearance
+    }
+
+    // MARK: - Body
+
     var body: some View {
         ZStack {
-            LinearGradient(
-                colors: [Color(red: 0.12, green: 0.04, blue: 0.20),
-                         Color(red: 0.02, green: 0.02, blue: 0.06)],
-                startPoint: .top, endPoint: .bottom
-            )
-            .ignoresSafeArea()
+            TabView {
+                jailbreakTab
+                    .tabItem { Label("jailbreak", systemImage: "lock.open.fill") }
+                packagesTab
+                    .tabItem { Label("packages", systemImage: "shippingbox.fill") }
+                exploitTab
+                    .tabItem { Label("exploit", systemImage: "bolt.fill") }
+                creditsTab
+                    .tabItem { Label("credits", systemImage: "heart.fill") }
+                settingsTab
+                    .tabItem { Label("settings", systemImage: "gearshape.fill") }
+            }
+            .accentColor(accent)
 
-            VStack(spacing: 18) {
-                Text("misakilarp")
-                    .font(.system(size: 42, weight: .heavy, design: .rounded))
-                    .foregroundStyle(
-                        LinearGradient(colors: [.pink, .purple],
-                                       startPoint: .leading, endPoint: .trailing)
-                    )
-                    .padding(.top, 40)
-
-                Text("iOS \(UIDevice.current.systemVersion) · \(UIDevice.current.model)")
-                    .font(.system(size: 14, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.6))
-
-                if phase != .idle {
-                    ProgressView(value: progress)
-                        .tint(.pink)
-                        .padding(.horizontal)
-                }
-
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 4) {
-                            ForEach(logs.indices, id: \.self) { i in
-                                Text(logs[i])
-                                    .font(.system(size: 12, design: .monospaced))
-                                    .foregroundColor(.green)
-                                    .id(i)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(12)
-                    }
-                    .onChange(of: logs.count) { count in
-                        withAnimation { proxy.scrollTo(count - 1, anchor: .bottom) }
-                    }
-                }
-                .frame(height: 280)
-                .background(Color.black.opacity(0.5))
-                .cornerRadius(12)
-                .padding(.horizontal)
-
-                Spacer()
-
-                Button {
-                    Task {
-                        if phase == .idle { await startJailbreak() }
-                        else if phase == .done { await fakeRespring() }
-                    }
-                } label: {
-                    Text(buttonTitle)
-                        .font(.headline)
+            if let message = toast {
+                VStack {
+                    Text(message)
+                        .font(.system(size: 14, weight: .semibold))
                         .foregroundColor(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
-                        .background(phase == .running ? Color.gray : Color.pink)
-                        .cornerRadius(14)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(accent.opacity(0.92))
+                        .cornerRadius(20)
+                        .padding(.top, 8)
+                    Spacer()
                 }
-                .disabled(phase == .running)
-                .padding(.horizontal)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .zIndex(1)
+            }
 
-                Text("Fake jailbreak, made for fun. Does nothing.")
-                    .font(.system(size: 11))
-                    .foregroundColor(.white.opacity(0.4))
-                    .padding(.bottom, 12)
+            if showLock {
+                lockScreen
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .zIndex(2)
             }
 
             Color.black
                 .ignoresSafeArea()
-                .overlay(ProgressView().tint(.white))
+                .overlay(bootLogo)
                 .opacity(blackout ? 1 : 0)
                 .allowsHitTesting(blackout)
+                .zIndex(3)
+        }
+        .preferredColorScheme(.dark)
+        .statusBarHidden(blackout)
+        .alert("Are you sure u wanna jailbreak?💜💜", isPresented: $showConfirm) {
+            Button("Cancel", role: .cancel) { }
+            Button("Jailbreak", role: .destructive) {
+                Task { await startJailbreak() }
+            }
+        } message: {
+            Text("This will run the \(exploits[exploit]) exploit and install the bootstrap on your device. Keep misakilarp open until it finishes and don't lock your screen.")
+        }
+    }
+
+    // MARK: - Shared pieces
+
+    private var background: some View {
+        LinearGradient(
+            colors: [theme.top, theme.bottom],
+            startPoint: .top, endPoint: .bottom
+        )
+        .ignoresSafeArea()
+    }
+
+    private func title(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 42, weight: .heavy, design: .rounded))
+            .foregroundStyle(
+                LinearGradient(colors: [accent, accent.opacity(0.55)],
+                               startPoint: .leading, endPoint: .trailing)
+            )
+    }
+
+    private func chip(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+            .foregroundColor(.white)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(accent.opacity(0.25))
+            .cornerRadius(10)
+    }
+
+    private func haptic(_ type: UINotificationFeedbackGenerator.FeedbackType) {
+        guard haptics else { return }
+        UINotificationFeedbackGenerator().notificationOccurred(type)
+    }
+
+    private func showToast(_ text: String) {
+        withAnimation { toast = text }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
+            withAnimation {
+                if toast == text { toast = nil }
+            }
+        }
+    }
+
+    private var bootLogo: some View {
+        VStack(spacing: 28) {
+            Image(systemName: "applelogo")
+                .font(.system(size: 78))
+                .foregroundColor(.white)
+            ProgressView(value: bootProgress)
+                .tint(.white)
+                .frame(width: 150)
+        }
+        .opacity(showBootLogo ? 1 : 0)
+    }
+
+    // MARK: - Jailbreak tab
+
+    private var progressRing: some View {
+        ZStack {
+            Circle()
+                .stroke(accent.opacity(0.2), lineWidth: 12)
+            Circle()
+                .trim(from: 0, to: CGFloat(displayProgress))
+                .stroke(accent, style: StrokeStyle(lineWidth: 12, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+                .shadow(color: accent.opacity(0.7), radius: 10)
+            VStack(spacing: 4) {
+                Image(systemName: (phase == .done || jailbroken) ? "lock.open.fill" : "lock.fill")
+                    .font(.system(size: 38))
+                    .foregroundColor(accent)
+                Text((phase == .idle && !jailbroken) ? "—" : "\(Int(displayProgress * 100))%")
+                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                    .foregroundColor(.white)
+            }
+        }
+        .frame(width: 160, height: 160)
+    }
+
+    private var creditBadge: some View {
+        Text("made by frtzxh1")
+            .font(.system(size: 14, weight: .bold, design: .rounded))
+            .foregroundColor(accent)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 7)
+            .background(Capsule().fill(accent.opacity(0.15)))
+    }
+
+    private var logBox: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(logs.indices, id: \.self) { i in
+                        Text(logs[i])
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundColor(logColor)
+                            .id(i)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+            }
+            .onChange(of: logs.count) { count in
+                withAnimation { proxy.scrollTo(count - 1, anchor: .bottom) }
+            }
+        }
+        .frame(height: 150)
+        .background(Color.black.opacity(0.5))
+        .cornerRadius(12)
+        .padding(.horizontal)
+    }
+
+    private func utilityButton(_ label: String, _ icon: String, color: Color,
+                               action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 18))
+                Text(label)
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .foregroundColor(color)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .background(Color.white.opacity(0.08))
+            .cornerRadius(12)
+        }
+    }
+
+    private var utilitiesRow: some View {
+        HStack(spacing: 10) {
+            utilityButton("UICache", "arrow.triangle.2.circlepath", color: accent) {
+                Task { await runUICache() }
+            }
+            utilityButton("Reboot", "power", color: accent) {
+                Task { await rebootUserspace() }
+            }
+            utilityButton("Remove", "trash", color: .red) {
+                removeJailbreak()
+            }
+        }
+        .padding(.horizontal)
+    }
+
+    private var mainButton: some View {
+        Button {
+            if phase == .idle && !jailbroken {
+                showConfirm = true
+            } else if phase == .done {
+                Task { await respring() }
+            }
+        } label: {
+            Text(buttonTitle)
+                .font(.headline)
+                .foregroundColor(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+                .background(buttonColor)
+                .cornerRadius(14)
+        }
+        .disabled(phase == .running || (phase == .idle && jailbroken))
+        .padding(.horizontal)
+        .padding(.bottom, 16)
+    }
+
+    private var jailbreakTab: some View {
+        ZStack {
+            background
+
+            VStack(spacing: 12) {
+                ScrollView {
+                    VStack(spacing: 16) {
+                        title("misakilarp")
+                            .padding(.top, 24)
+
+                        Text("iOS \(UIDevice.current.systemVersion) · \(UIDevice.current.model)")
+                            .font(.system(size: 14, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.6))
+
+                        progressRing
+
+                        Text(statusText)
+                            .font(.system(size: 13, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.7))
+                            .lineLimit(1)
+                            .padding(.horizontal)
+
+                        HStack(spacing: 8) {
+                            chip("exploit: \(exploits[exploit])")
+                            chip("luck: \(Int(luck))%")
+                        }
+
+                        creditBadge
+
+                        logBox
+                    }
+                    .padding(.bottom, 8)
+                }
+
+                if jailbroken && phase == .idle {
+                    utilitiesRow
+                }
+
+                mainButton
+            }
+        }
+    }
+
+    // MARK: - Packages tab
+
+    private func isInstalled(_ name: String) -> Bool {
+        installedPkgs.components(separatedBy: ",").contains(name)
+    }
+
+    private func packageRow(_ i: Int) -> some View {
+        let pkg = packages[i]
+        let installed = isInstalled(pkg.0)
+        return HStack(spacing: 12) {
+            Image(systemName: pkg.2)
+                .font(.system(size: 20))
+                .foregroundColor(.white)
+                .frame(width: 44, height: 44)
+                .background(accent.opacity(0.8))
+                .cornerRadius(10)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(pkg.0)
+                    .font(.headline)
+                    .foregroundColor(.white)
+                Text(pkg.1)
+                    .font(.system(size: 12))
+                    .foregroundColor(.white.opacity(0.6))
+            }
+
+            Spacer()
+
+            if installing == pkg.0 {
+                ProgressView().tint(.white)
+            } else {
+                Button {
+                    Task { await togglePackage(pkg.0) }
+                } label: {
+                    Text(installed ? "Remove" : "Get")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundColor(installed ? .red : .white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 6)
+                        .background(installed ? Color.white.opacity(0.1) : accent)
+                        .cornerRadius(14)
+                }
+            }
+        }
+        .padding(12)
+        .background(Color.white.opacity(0.07))
+        .cornerRadius(14)
+    }
+
+    private var packagesTab: some View {
+        ZStack {
+            background
+
+            ScrollView {
+                VStack(spacing: 12) {
+                    title("packages")
+                        .padding(.top, 40)
+
+                    if !jailbroken {
+                        chip("jailbreak required to install")
+                    }
+
+                    ForEach(packages.indices, id: \.self) { i in
+                        packageRow(i)
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.bottom, 20)
+            }
+        }
+    }
+
+    // MARK: - Credits tab
+
+    private var creditsTab: some View {
+        ZStack {
+            background
+
+            ScrollView {
+                VStack(spacing: 14) {
+                    title("credits")
+                        .padding(.top, 40)
+
+                    Text("made possible by")
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.6))
+                        .padding(.bottom, 8)
+
+                    ForEach(credits.indices, id: \.self) { i in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(credits[i].0)
+                                .font(.headline)
+                                .foregroundColor(.white)
+                            Text(credits[i].1)
+                                .font(.system(size: 13))
+                                .foregroundColor(accent)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(14)
+                        .background(Color.white.opacity(0.07))
+                        .cornerRadius(12)
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.bottom, 20)
+            }
+        }
+    }
+
+    // MARK: - Exploit tab
+
+    private var exploitTab: some View {
+        ZStack {
+            background
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    title("exploit")
+                        .padding(.top, 40)
+
+                    Picker("Exploit", selection: $exploit) {
+                        ForEach(exploits.indices, id: \.self) { i in
+                            Text(exploits[i]).tag(i)
+                        }
+                    }
+                    .pickerStyle(SegmentedPickerStyle())
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Kernel luck: \(Int(luck))%")
+                            .foregroundColor(.white)
+                        Slider(value: $luck, in: 0...100, step: 1)
+                            .accentColor(accent)
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Success chance: \(successChance)%")
+                            .foregroundColor(.white)
+                        ProgressView(value: Double(successChance), total: 100)
+                            .tint(accent)
+                    }
+
+                    Toggle("Disable PAC", isOn: $disablePAC)
+                        .toggleStyle(SwitchToggleStyle(tint: accent))
+                        .foregroundColor(.white)
+
+                    Toggle("Summon kernel cat 🐱", isOn: $summonCat)
+                        .toggleStyle(SwitchToggleStyle(tint: accent))
+                        .foregroundColor(.white)
+
+                    Button {
+                        generateOffsets()
+                    } label: {
+                        Text("Calibrate offsets")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                            .background(accent.opacity(0.85))
+                            .cornerRadius(14)
+                    }
+
+                    if !offsets.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(offsets.indices, id: \.self) { i in
+                                Text(offsets[i])
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundColor(logColor)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                        .background(Color.black.opacity(0.5))
+                        .cornerRadius(12)
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.bottom, 20)
+            }
+        }
+    }
+
+    // MARK: - Settings tab
+
+    private func settingsCard<Content: View>(_ heading: String,
+                                             @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(heading)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(.white.opacity(0.6))
+                .textCase(.uppercase)
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(Color.white.opacity(0.07))
+        .cornerRadius(14)
+    }
+
+    private var accentPicker: some View {
+        HStack(spacing: 12) {
+            ForEach(accents.indices, id: \.self) { i in
+                Circle()
+                    .fill(accents[i].1)
+                    .frame(width: 34, height: 34)
+                    .overlay(
+                        Circle().stroke(Color.white, lineWidth: accentIndex == i ? 3 : 0)
+                    )
+                    .onTapGesture { accentIndex = i }
+            }
+        }
+    }
+
+    private var themePicker: some View {
+        VStack(spacing: 10) {
+            ForEach(themes.indices, id: \.self) { i in
+                HStack {
+                    LinearGradient(colors: [themes[i].top, themes[i].bottom],
+                                   startPoint: .top, endPoint: .bottom)
+                        .frame(width: 44, height: 28)
+                        .cornerRadius(8)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                        )
+                    Text(themes[i].name)
+                        .foregroundColor(.white)
+                    Spacer()
+                    if themeIndex == i {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(accent)
+                    }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { themeIndex = i }
+            }
+        }
+    }
+
+    private var settingsTab: some View {
+        ZStack {
+            background
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    title("settings")
+                        .padding(.top, 40)
+
+                    settingsCard("Accent color") {
+                        accentPicker
+                    }
+
+                    settingsCard("Theme") {
+                        themePicker
+                    }
+
+                    settingsCard("Jailbreak") {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Speed: x\(String(format: "%.1f", speed))")
+                                .foregroundColor(.white)
+                            Slider(value: $speed, in: 0.5...3, step: 0.5)
+                                .accentColor(accent)
+                        }
+                    }
+
+                    settingsCard("Respring") {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Duration: \(Int(respringSeconds)) s")
+                                .foregroundColor(.white)
+                            Slider(value: $respringSeconds, in: 3...15, step: 1)
+                                .accentColor(accent)
+                        }
+                        Toggle("Show lock screen after", isOn: $lockAfterRespring)
+                            .toggleStyle(SwitchToggleStyle(tint: accent))
+                            .foregroundColor(.white)
+                    }
+
+                    settingsCard("General") {
+                        Toggle("Haptics", isOn: $haptics)
+                            .toggleStyle(SwitchToggleStyle(tint: accent))
+                            .foregroundColor(.white)
+                        Toggle("Logs use accent color", isOn: $logUsesAccent)
+                            .toggleStyle(SwitchToggleStyle(tint: accent))
+                            .foregroundColor(.white)
+                    }
+
+                    Button {
+                        themeIndex = 0
+                        accentIndex = 0
+                        respringSeconds = 6
+                        speed = 1
+                        haptics = true
+                        lockAfterRespring = true
+                        logUsesAccent = false
+                    } label: {
+                        Text("Reset settings")
+                            .font(.headline)
+                            .foregroundColor(.red)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                            .background(Color.white.opacity(0.07))
+                            .cornerRadius(14)
+                    }
+                    .padding(.bottom, 20)
+                }
+                .padding(.horizontal)
+            }
+        }
+    }
+
+    // MARK: - Lock screen (shown after respring / reboot)
+
+    private var lockScreen: some View {
+        ZStack {
+            LinearGradient(
+                colors: [accent.opacity(0.75), theme.top, theme.bottom],
+                startPoint: .topLeading, endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+
+            VStack(spacing: 6) {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 18))
+                    .foregroundColor(.white.opacity(0.9))
+                    .padding(.top, 60)
+
+                Text(Date(), format: .dateTime.weekday(.wide).month(.wide).day())
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.9))
+
+                Text(Date(), style: .time)
+                    .font(.system(size: 88, weight: .thin, design: .rounded))
+                    .foregroundColor(.white)
+
+                Spacer()
+
+                Text("Swipe up to unlock")
+                    .font(.system(size: 14))
+                    .foregroundColor(.white.opacity(0.7))
+
+                Capsule()
+                    .fill(Color.white.opacity(0.8))
+                    .frame(width: 140, height: 5)
+                    .padding(.top, 8)
+                    .padding(.bottom, 10)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { unlock() }
+        .gesture(
+            DragGesture().onEnded { value in
+                if value.translation.height < -60 { unlock() }
+            }
+        )
+    }
+
+    private func unlock() {
+        withAnimation(.spring(response: 0.55, dampingFraction: 0.82)) {
+            showLock = false
+        }
+    }
+
+    // MARK: - Logic
+
+    private func generateOffsets() {
+        let names = ["kernel_base", "proc_ro", "vm_map", "pmap_enter", "larp_ptr", "banana_slide"]
+        offsets = names.map { name in
+            let value = String(UInt32.random(in: 0x10000000...0xFFFFFFFF), radix: 16)
+            return "\(name) = 0xfffffff0\(value)"
         }
     }
 
     @MainActor
     private func startJailbreak() async {
-        guard phase == .idle else { return }
+        guard phase == .idle, !jailbroken else { return }
         phase = .running
         logs = []
         progress = 0
         for (line, value) in steps {
             logs.append(line)
             withAnimation(.easeInOut(duration: 0.4)) { progress = value }
-            try? await Task.sleep(nanoseconds: UInt64.random(in: 350_000_000...900_000_000))
+            let delay = Double(UInt64.random(in: 350_000_000...900_000_000)) / speed
+            try? await Task.sleep(nanoseconds: UInt64(delay))
         }
+        jailbroken = true
         phase = .done
+        haptic(.success)
     }
 
     @MainActor
-    private func fakeRespring() async {
+    private func respring() async {
         withAnimation(.easeIn(duration: 0.3)) { blackout = true }
-        try? await Task.sleep(nanoseconds: 1_800_000_000)
+        try? await Task.sleep(nanoseconds: UInt64(respringSeconds * 1_000_000_000))
         phase = .idle
         progress = 0
         logs = []
-        withAnimation(.easeOut(duration: 0.5)) { blackout = false }
+        withAnimation(.easeOut(duration: 0.6)) {
+            showLock = lockAfterRespring
+            blackout = false
+        }
+        haptic(.success)
+    }
+
+    @MainActor
+    private func rebootUserspace() async {
+        withAnimation(.easeIn(duration: 0.3)) { blackout = true }
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        bootProgress = 0
+        showBootLogo = true
+        let total = 10
+        for i in 1...total {
+            withAnimation(.linear(duration: 0.8)) {
+                bootProgress = Double(i) / Double(total)
+            }
+            try? await Task.sleep(nanoseconds: 800_000_000)
+        }
+        showBootLogo = false
+        try? await Task.sleep(nanoseconds: 700_000_000)
+        phase = .idle
+        progress = 0
+        logs = []
+        withAnimation(.easeOut(duration: 0.6)) {
+            showLock = true
+            blackout = false
+        }
+        haptic(.success)
+    }
+
+    @MainActor
+    private func runUICache() async {
+        showToast("Refreshing icon cache...")
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        showToast("UICache complete")
+        haptic(.success)
+    }
+
+    private func removeJailbreak() {
+        jailbroken = false
+        installedPkgs = ""
+        progress = 0
+        logs = []
+        showToast("Jailbreak removed")
+    }
+
+    @MainActor
+    private func togglePackage(_ name: String) async {
+        guard jailbroken else {
+            showToast("Jailbreak first")
+            return
+        }
+        var list = installedPkgs.components(separatedBy: ",").filter { !$0.isEmpty }
+        if list.contains(name) {
+            list.removeAll { $0 == name }
+            installedPkgs = list.joined(separator: ",")
+            showToast("\(name) removed")
+            return
+        }
+        installing = name
+        try? await Task.sleep(nanoseconds: UInt64(2_000_000_000 / speed))
+        list.append(name)
+        installedPkgs = list.joined(separator: ",")
+        installing = nil
+        haptic(.success)
+        showToast("\(name) installed")
     }
 }
