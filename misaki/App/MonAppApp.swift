@@ -34,7 +34,7 @@ struct MisakiView: View {
         ("Mr. Banana", "kernel whisperer"),
         ("my cat", "beta tester (walked on the keyboard)"),
         ("Stack Overflow", "literally everything"),
-        ("a random guy on Discord", "said \"trust me bro\""),
+        ("a random guy on Discord", "moral support"),
         ("you 💜", "for believing")
     ]
 
@@ -45,16 +45,16 @@ struct MisakiView: View {
             ("[*] using exploit: \(exploits[exploit])", 0.16),
             ("[*] kernel luck: \(Int(luck))%", 0.22),
             ("[*] fetching kernel offsets...", 0.30),
-            ("[+] offsets found (trust me)", 0.38),
+            ("[+] offsets found", 0.38),
             ("[*] triggering vulnerability...", 0.46),
             ("[*] racing threads...", 0.54),
             ("[+] got kernel read/write", 0.62),
-            (disablePAC ? "[*] bypassing PAC... (probably)" : "[*] skipping PAC, living dangerously", 0.70),
+            (disablePAC ? "[*] bypassing PAC..." : "[*] PAC bypass skipped", 0.70),
             ("[*] bypassing PPL...", 0.76),
             ("[+] escaping sandbox", 0.82),
             (summonCat ? "[+] kernel cat summoned 🐱" : "[*] remounting rootfs as r/w...", 0.88),
             ("[*] installing bootstrap...", 0.94),
-            ("[+] done. nothing was actually modified.", 1.0)
+            ("[+] jailbreak succeeded, respring to finish", 1.0)
         ]
     }
 
@@ -88,18 +88,16 @@ struct MisakiView: View {
 
             Color.black
                 .ignoresSafeArea()
-                .overlay(ProgressView().tint(.white))
                 .opacity(blackout ? 1 : 0)
                 .allowsHitTesting(blackout)
         }
         .preferredColorScheme(.dark)
+        .statusBarHidden(blackout)
         .alert("Are you sure u wanna jailbreak?💜💜", isPresented: $showConfirm) {
             Button("Cancel", role: .cancel) { }
             Button("Jailbreak") {
                 Task { await startJailbreak() }
             }
-        } message: {
-            Text("(it's fake anyway)")
         }
     }
 
@@ -171,7 +169,7 @@ struct MisakiView: View {
                     if phase == .idle {
                         showConfirm = true
                     } else if phase == .done {
-                        Task { await fakeRespring() }
+                        Task { await respring() }
                     }
                 } label: {
                     Text(buttonTitle)
@@ -184,11 +182,7 @@ struct MisakiView: View {
                 }
                 .disabled(phase == .running)
                 .padding(.horizontal)
-
-                Text("Fake jailbreak, made for fun. Does nothing.")
-                    .font(.system(size: 11))
-                    .foregroundColor(.white.opacity(0.4))
-                    .padding(.bottom, 12)
+                .padding(.bottom, 16)
             }
         }
     }
@@ -204,7 +198,7 @@ struct MisakiView: View {
                     title("credits")
                         .padding(.top, 40)
 
-                    Text("everyone who definitely helped")
+                    Text("made possible by")
                         .font(.system(size: 13, design: .monospaced))
                         .foregroundColor(.white.opacity(0.6))
                         .padding(.bottom, 8)
@@ -223,11 +217,6 @@ struct MisakiView: View {
                         .background(Color.white.opacity(0.07))
                         .cornerRadius(12)
                     }
-
-                    Text("no kernels were harmed 💜")
-                        .font(.system(size: 11))
-                        .foregroundColor(.white.opacity(0.4))
-                        .padding(.top, 10)
                 }
                 .padding(.horizontal)
             }
@@ -259,7 +248,7 @@ struct MisakiView: View {
                             .accentColor(.pink)
                     }
 
-                    Toggle("Disable PAC (probably)", isOn: $disablePAC)
+                    Toggle("Disable PAC", isOn: $disablePAC)
                         .toggleStyle(SwitchToggleStyle(tint: .pink))
                         .foregroundColor(.white)
 
@@ -292,17 +281,13 @@ struct MisakiView: View {
                         .background(Color.black.opacity(0.5))
                         .cornerRadius(12)
                     }
-
-                    Text("Warning: these settings change the log text and absolutely nothing else.")
-                        .font(.system(size: 11))
-                        .foregroundColor(.white.opacity(0.4))
                 }
                 .padding(.horizontal)
             }
         }
     }
 
-    // MARK: - Fake logic
+    // MARK: - Logic
 
     private func generateOffsets() {
         let names = ["kernel_base", "proc_ro", "vm_map", "pmap_enter", "larp_ptr", "banana_slide"]
@@ -327,9 +312,9 @@ struct MisakiView: View {
     }
 
     @MainActor
-    private func fakeRespring() async {
+    private func respring() async {
         withAnimation(.easeIn(duration: 0.3)) { blackout = true }
-        try? await Task.sleep(nanoseconds: 1_800_000_000)
+        try? await Task.sleep(nanoseconds: 6_000_000_000)
         phase = .idle
         progress = 0
         logs = []
